@@ -50,6 +50,14 @@ inputs:
     description: 'Generate index.html in output-dir for immediate GitHub Pages deployment'
     required: false
     default: 'true'
+  post-pr-comment:
+    description: 'Post or update an architectural report comment on Pull Requests'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GitHub token for posting PR comments (needs pull-requests:write)'
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   report-html:
@@ -58,6 +66,9 @@ outputs:
   report-json:
     description: 'Path to the generated JSON summary'
     value: ${{ steps.run-analysis.outputs.report_json }}
+  report-markdown:
+    description: 'Path to the generated markdown summary'
+    value: ${{ steps.run-analysis.outputs.report_markdown }}
   smell-count:
     description: 'Total architectural smells detected'
     value: ${{ steps.run-analysis.outputs.smell_count }}
@@ -101,3 +112,51 @@ runs:
           --exclude-tests "${{ inputs.exclude-tests }}" \
           --fail-on-smells "${{ inputs.fail-on-smells }}" \
           --generate-pages-index "${{ inputs.generate-pages-index }}"
+
+    - name: Post or update PR comment
+      if: ${{ inputs.post-pr-comment == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- arcade-agent-analyze-action-comment -->';
+          const commentFile = '${{ steps.run-analysis.outputs.report_markdown }}';
+          if (!commentFile || !fs.existsSync(commentFile)) {
+            core.info('No PR comment file found at ' + commentFile);
+            return;
+          }
+          const commentContent = fs.readFileSync(commentFile, 'utf8');
+          const body = `${marker}\n${commentContent}`;
+
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            per_page: 100,
+          });
+
+          const existing = comments.data.find(c => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+            core.info(`Updated existing PR comment ${existing.id}`);
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+            core.info('Created new architectural analysis PR comment');
+          }
+
+    - name: Skip PR comment on forked PRs
+      if: ${{ inputs.post-pr-comment == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+      shell: bash
+      run: |
+        echo "Skipping PR comment because forked pull_request workflows do not receive write access to PR comments by default."

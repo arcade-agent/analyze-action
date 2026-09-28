@@ -22,6 +22,11 @@ on:
     branches: [ main, master ]
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write  # Required for posting/updating PR architectural summary
+  issues: write
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -31,6 +36,7 @@ jobs:
       - name: Analyze Architecture
         uses: arcade-agent/analyze-action@v1
         with:
+          post-pr-comment: true
           fail-on-smells: false
 ```
 *Outputs a rich architectural table with component breakdowns directly in your GitHub Actions Job Summary.*

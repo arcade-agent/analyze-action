@@ -149,7 +149,14 @@ def main() -> None:
         summary_md.append("")
 
     summary_md.append(f"*Artifacts generated in `{out_dir}`: Interactive HTML report + JSON baseline.*")
-    append_github_summary("\n".join(summary_md))
+    markdown_content = "\n".join(summary_md)
+
+    pr_comment_file = out_dir / "pr_comment.md"
+    with open(pr_comment_file, "w", encoding="utf-8") as f:
+        f.write(markdown_content)
+
+    append_github_summary(markdown_content)
+    set_github_output("report_markdown", str(pr_comment_file))
 
     print("\n==================================================")
     print("📋 Analysis Summary")
