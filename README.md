@@ -43,9 +43,11 @@ jobs:
 
 ---
 
-### 2. Commit Comments on Push (Filtered by Branch Regex)
+### 2. Impact-Scoped Commit Comments on Push (Filtered by Branch Regex)
 
-Post architectural reports directly onto Git commits when pushing to specific branches (e.g., `main`, `master`, or release branches):
+Post localized blast-radius reports directly onto Git commits on eligible branches.
+* By default (`commit-comment-mode: 'impact'`), it maps changed files to affected components, downstream callers, and broken public contracts.
+* **Zero noise**: Commits only modifying non-structural files (docs, markdown, CI workflows) are **automatically skipped** to keep commit history clean.
 
 ```yaml
 name: Architecture Check
@@ -140,6 +142,7 @@ jobs:
 | `exclude-tests` | `true` | Exclude test suites and vendor folders. |
 | `post-pr-comment` | `true` | Post or update an architectural report comment on Pull Requests. |
 | `post-commit-comment` | `false` | Post an architectural report comment directly onto the Git commit on push events. |
+| `commit-comment-mode` | `impact` | Scope of commit comment: `impact` (blast-radius of changed code, skips non-code commits) or `full`. |
 | `commit-comment-branch-regex` | `^(main\|master)$` | Regex pattern matching branches eligible for commit comments. |
 | `github-token` | `${{ github.token }}` | GitHub token with `pull-requests:write` or `contents:write` permissions. |
 | `python-version` | `3.12` | Python version for runtime environment. |

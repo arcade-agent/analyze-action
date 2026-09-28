@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Runner script for arcade-agent/analyze-action.
 
-Orchestrates arcade-self-analysis, prepares static files for GitHub Pages,
-injects GitHub Actions Job Summary, and sets step outputs.
+Orchestrates arcade-self-analysis, computes impact-scoped diff analysis,
+prepares static files for GitHub Pages, injects GitHub Actions Job Summary,
+and sets step outputs.
 """
 
 import argparse
@@ -12,6 +13,15 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+CONFIG_FILE_NAMES = {
+    "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle",
+    "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+    "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
+    "baseline.json", "tsconfig.json", "architecture.yml"
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude-tests", default="true", help="Apply test exclusion policy")
     parser.add_argument("--fail-on-smells", default="false", help="Fail if smells detected")
     parser.add_argument("--generate-pages-index", default="true", help="Generate index.html for Pages")
+    parser.add_argument("--commit-comment-mode", default="impact", choices=["impact", "full"], help="Commit comment mode")
     return parser.parse_args()
 
 
@@ -40,6 +51,130 @@ def append_github_summary(markdown: str) -> None:
     if summary_file:
         with open(summary_file, "a", encoding="utf-8") as f:
             f.write(markdown + "\n")
+
+
+def get_changed_files() -> list[str]:
+    """Retrieve changed files in current git commit."""
+    try:
+        res = subprocess.run(
+            ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+
+        res = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+    except Exception as e:
+        print(f"Warning: Could not get git diff: {e}", file=sys.stderr)
+    return []
+
+
+def compute_commit_impact(
+    source_path: str,
+    language: str,
+    algorithm: str,
+    all_smells: list[dict],
+    repo_display: str,
+) -> tuple[bool, str]:
+    """Calculate impact-scoped architectural summary for current commit."""
+    changed_files = get_changed_files()
+    if not changed_files:
+        return False, ""
+
+    commit_sha = os.environ.get("GITHUB_SHA", "HEAD")[:7]
+    touched_configs = [f for f in changed_files if Path(f).name in CONFIG_FILE_NAMES or ".arcade" in f]
+
+    impact = {}
+    try:
+        from arcade_agent.tools.ingest import ingest
+        from arcade_agent.tools.parse import parse
+        from arcade_agent.tools.recover import recover
+        from arcade_agent.tools.diff_impact import diff_impact
+
+        repo = ingest(source_path)
+        lang = language or repo.language or "python"
+        graph = parse(str(repo.path), language=lang)
+        arch = recover(graph, algorithm=algorithm)
+        impact = diff_impact(graph, changed_files, architecture=arch)
+    except Exception as e:
+        print(f"Warning: diff_impact evaluation failed: {e}", file=sys.stderr)
+
+    matched_files = impact.get("matched_files", [])
+    changed_entities = impact.get("changed_entities", [])
+    affected_components = impact.get("affected_components", [])
+    downstream_dependents = impact.get("downstream_dependents", [])
+    broken_contracts = impact.get("broken_contracts", [])
+
+    has_code_impact = bool(matched_files or affected_components)
+    has_config_impact = bool(touched_configs)
+
+    if not has_code_impact and not has_config_impact:
+        print(f"ℹ️ Commit {commit_sha} does not touch structural code or build configs. Changed files: {changed_files}")
+        return False, ""
+
+    # Filter smells strictly relevant to affected components
+    affected_set = set(affected_components)
+    relevant_smells = []
+    for s in all_smells:
+        comps = set(s.get("components") or [])
+        if s.get("component"):
+            comps.add(s.get("component"))
+        if comps & affected_set:
+            relevant_smells.append(s)
+
+    status_icon = "🟢" if len(relevant_smells) == 0 else ("🟡" if len(relevant_smells) <= 2 else "🔴")
+    comp_list = ", ".join(f"`{c}`" for c in affected_components) if affected_components else "*(None direct)*"
+
+    md = [
+        f"## {status_icon} Commit Architecture Impact: `{repo_display}`",
+        f"**Commit:** `{commit_sha}` | **Scope:** `Impact-Scoped` | **Affected Components:** {comp_list}",
+        "",
+    ]
+
+    if has_code_impact:
+        md.extend([
+            "| Dimension | Count | Details |",
+            "| :--- | :---: | :--- |",
+            f"| **Directly Changed Files** | `{len(matched_files)}` | {', '.join(f'`{f}`' for f in matched_files[:3])}{'...' if len(matched_files) > 3 else ''} |",
+            f"| **Modified Entities** | `{len(changed_entities)}` | Structural classes/functions directly modified |",
+            f"| **Downstream Callers** | `{len(downstream_dependents)}` | Transitive dependents relying on changed code |",
+            f"| **Public Contracts** | `{len(broken_contracts)}` | Modified public entities called from outside |",
+            "",
+        ])
+
+        if relevant_smells:
+            md.extend([
+                "### ⚠️ Localized Architectural Smells in Touched Area",
+                "| Smell Type | Component(s) | Description |",
+                "| :--- | :--- | :--- |",
+            ])
+            for s in relevant_smells:
+                s_type = s.get("smell_type") or s.get("name") or "Unknown"
+                s_comp = s.get("component") or (", ".join(s.get("components", []))) or "-"
+                s_desc = s.get("description") or "-"
+                md.append(f"| `{s_type}` | **{s_comp}** | {s_desc} |")
+            md.append("")
+        else:
+            md.append("> ✨ **No architectural smells or cycles in the touched components.**\n")
+
+    if has_config_impact:
+        md.extend([
+            "### 🔧 Build & Configuration Effects",
+            f"- Modified build/architecture definitions: {', '.join(f'`{f}`' for f in touched_configs)}",
+            "*- Note: Configuration changes may alter external dependencies, compiler boundaries, or baseline profiles.*",
+            "",
+        ])
+
+    return True, "\n".join(md)
 
 
 def main() -> None:
@@ -117,7 +252,7 @@ def main() -> None:
     set_github_output("component_count", str(num_components))
     set_github_output("pages_dir", str(out_dir))
 
-    # 4. Generate GitHub Step Summary (Rich Markdown)
+    # 4. Generate Comprehensive Summary (for Step Summary & PR comments)
     status_icon = "🟢" if num_smells == 0 else ("🟡" if num_smells <= 2 else "🔴")
     summary_md = [
         f"## {status_icon} Architecture Analysis: {repo_display}",
@@ -145,18 +280,44 @@ def main() -> None:
             summary_md.append(f"| `{s_type}` | **{s_comp}** | {s_desc} |")
         summary_md.append("")
     else:
-        summary_md.append("> ✨ **Clean Architecture!** No architectural smells or cyclic components detected.")
-        summary_md.append("")
+        summary_md.append("> ✨ **Clean Architecture!** No architectural smells or cyclic components detected.\n")
 
     summary_md.append(f"*Artifacts generated in `{out_dir}`: Interactive HTML report + JSON baseline.*")
-    markdown_content = "\n".join(summary_md)
+    full_markdown_content = "\n".join(summary_md)
 
     pr_comment_file = out_dir / "pr_comment.md"
     with open(pr_comment_file, "w", encoding="utf-8") as f:
-        f.write(markdown_content)
+        f.write(full_markdown_content)
 
-    append_github_summary(markdown_content)
+    append_github_summary(full_markdown_content)
     set_github_output("report_markdown", str(pr_comment_file))
+
+    # 5. Compute Commit Comment (Impact-Scoped vs Full)
+    commit_comment_file = out_dir / "commit_comment.md"
+    if args.commit_comment_mode == "impact":
+        has_impact, impact_md = compute_commit_impact(
+            args.source_path,
+            args.language,
+            args.algorithm,
+            smells,
+            repo_display,
+        )
+        if has_impact:
+            with open(commit_comment_file, "w", encoding="utf-8") as f:
+                f.write(impact_md)
+            set_github_output("has_architectural_impact", "true")
+            set_github_output("commit_comment_markdown", str(commit_comment_file))
+            print("✓ Impact-scoped commit comment prepared.")
+        else:
+            set_github_output("has_architectural_impact", "false")
+            set_github_output("commit_comment_markdown", "")
+            print("ℹ️ Skipping commit comment: No structural code entities or build configs touched.")
+    else:
+        # Full mode
+        with open(commit_comment_file, "w", encoding="utf-8") as f:
+            f.write(full_markdown_content)
+        set_github_output("has_architectural_impact", "true")
+        set_github_output("commit_comment_markdown", str(commit_comment_file))
 
     print("\n==================================================")
     print("📋 Analysis Summary")
