@@ -1,0 +1,104 @@
+name: 'Arcade Architecture Analysis'
+description: 'Zero-config software architecture recovery, smell detection, and living GitHub Pages reports powered by arcade-agent.'
+author: 'arcade-agent'
+branding:
+  icon: 'layers'
+  color: 'blue'
+
+inputs:
+  source-path:
+    description: 'Path to the source repository or project root'
+    required: false
+    default: '.'
+  language:
+    description: 'Optional language override (java, python, typescript, c, go, kotlin, rust, or multi)'
+    required: false
+    default: ''
+  algorithm:
+    description: 'Primary architecture recovery algorithm (pkg, acdc, arc, wca)'
+    required: false
+    default: 'pkg'
+  output-dir:
+    description: 'Directory where HTML/JSON reports and GitHub Pages artifacts are saved'
+    required: false
+    default: 'public'
+  repo-name:
+    description: 'Optional repository name override for reports'
+    required: false
+    default: ''
+  exclude-dirs:
+    description: 'Comma-separated project-relative directories to exclude (e.g. e2e,fixtures)'
+    required: false
+    default: ''
+  exclude-tests:
+    description: 'Apply built-in test/vendor/build exclusion policy (default: true)'
+    required: false
+    default: 'true'
+  arcade-agent-version:
+    description: 'Specific arcade-agent version to install from PyPI (leave blank for latest)'
+    required: false
+    default: ''
+  python-version:
+    description: 'Python version used for analysis runtime'
+    required: false
+    default: '3.12'
+  fail-on-smells:
+    description: 'Fail step if any architectural smells are detected'
+    required: false
+    default: 'false'
+  generate-pages-index:
+    description: 'Generate index.html in output-dir for immediate GitHub Pages deployment'
+    required: false
+    default: 'true'
+
+outputs:
+  report-html:
+    description: 'Path to the generated interactive HTML report'
+    value: ${{ steps.run-analysis.outputs.report_html }}
+  report-json:
+    description: 'Path to the generated JSON summary'
+    value: ${{ steps.run-analysis.outputs.report_json }}
+  smell-count:
+    description: 'Total architectural smells detected'
+    value: ${{ steps.run-analysis.outputs.smell_count }}
+  component-count:
+    description: 'Number of recovered architectural components'
+    value: ${{ steps.run-analysis.outputs.component_count }}
+  pages-dir:
+    description: 'Directory ready to be uploaded with actions/upload-pages-artifact'
+    value: ${{ steps.run-analysis.outputs.pages_dir }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: 'pip'
+
+    - name: Install arcade-agent
+      shell: bash
+      run: |
+        PKG="arcade-agent[languages]"
+        if [ -n "${{ inputs.arcade-agent-version }}" ]; then
+          PKG="arcade-agent[languages]==${{ inputs.arcade-agent-version }}"
+        fi
+        echo "Installing $PKG..."
+        python -m pip install --upgrade pip
+        pip install "$PKG"
+
+    - name: Run Architecture Analysis
+      id: run-analysis
+      shell: bash
+      run: |
+        python3 "${{ github.action_path }}/entrypoint.py" \
+          --source-path "${{ inputs.source-path }}" \
+          --language "${{ inputs.language }}" \
+          --algorithm "${{ inputs.algorithm }}" \
+          --output-dir "${{ inputs.output-dir }}" \
+          --repo-name "${{ inputs.repo-name }}" \
+          --exclude-dirs "${{ inputs.exclude-dirs }}" \
+          --exclude-tests "${{ inputs.exclude-tests }}" \
+          --fail-on-smells "${{ inputs.fail-on-smells }}" \
+          --generate-pages-index "${{ inputs.generate-pages-index }}"

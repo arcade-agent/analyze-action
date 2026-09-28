@@ -1,0 +1,22 @@
+name: Test Action
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test Self-Analysis
+        uses: ./
+        with:
+          source-path: '.'
+          output-dir: 'public'
+          fail-on-smells: false

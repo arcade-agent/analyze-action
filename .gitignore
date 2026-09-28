@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*$py.class
+public/
+reports/
+.DS_Store
+*.zip
+.arcade-cache/
+.arcade/
