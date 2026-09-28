@@ -54,8 +54,16 @@ inputs:
     description: 'Post or update an architectural report comment on Pull Requests'
     required: false
     default: 'true'
+  post-commit-comment:
+    description: 'Post an architectural report comment directly on the commit (for push events)'
+    required: false
+    default: 'false'
+  commit-comment-branch-regex:
+    description: 'Regex pattern of branches eligible for commit comments (default: ^(main|master)$)'
+    required: false
+    default: '^(main|master)$'
   github-token:
-    description: 'GitHub token for posting PR comments (needs pull-requests:write)'
+    description: 'GitHub token for posting comments (needs pull-requests:write or contents:write)'
     required: false
     default: ${{ github.token }}
 
@@ -160,3 +168,43 @@ runs:
       shell: bash
       run: |
         echo "Skipping PR comment because forked pull_request workflows do not receive write access to PR comments by default."
+
+    - name: Post Commit Comment
+      if: ${{ inputs.post-commit-comment == 'true' && github.event_name == 'push' }}
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const pattern = `${{ inputs.commit-comment-branch-regex }}`;
+          const ref = context.ref || '';
+          const branch = ref.replace('refs/heads/', '');
+
+          if (pattern) {
+            const regex = new RegExp(pattern);
+            if (!regex.test(branch)) {
+              core.info(`Branch '${branch}' does not match regex '${pattern}'. Skipping commit comment.`);
+              return;
+            }
+          }
+
+          const marker = '<!-- arcade-agent-analyze-action-commit-comment -->';
+          const commentFile = '${{ steps.run-analysis.outputs.report_markdown }}';
+          if (!commentFile || !fs.existsSync(commentFile)) {
+            core.info('No comment file found at ' + commentFile);
+            return;
+          }
+          const commentContent = fs.readFileSync(commentFile, 'utf8');
+          const body = `${marker}\n${commentContent}`;
+
+          try {
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: body,
+            });
+            core.info(`Created commit comment on ${context.sha} for branch '${branch}'`);
+          } catch (err) {
+            core.warning(`Failed to create commit comment: ${err.message}. Make sure workflow has 'contents: write' permission.`);
+          }

@@ -39,7 +39,37 @@ jobs:
           post-pr-comment: true
           fail-on-smells: false
 ```
-*Outputs a rich architectural table with component breakdowns directly in your GitHub Actions Job Summary.*
+*Outputs a rich architectural table with component breakdowns directly in your GitHub Actions Job Summary and PR discussion thread.*
+
+---
+
+### 2. Commit Comments on Push (Filtered by Branch Regex)
+
+Post architectural reports directly onto Git commits when pushing to specific branches (e.g., `main`, `master`, or release branches):
+
+```yaml
+name: Architecture Check
+
+on:
+  push:
+    branches: [ main, master, 'release/**' ]
+
+permissions:
+  contents: write  # Required for posting commit comments
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Analyze Architecture
+        uses: arcade-agent/analyze-action@v1
+        with:
+          post-commit-comment: true
+          commit-comment-branch-regex: '^(main|master|release/.*)$'
+          fail-on-smells: false
+```
 
 ---
 
@@ -108,6 +138,10 @@ jobs:
 | `fail-on-smells` | `false` | Fail the GitHub Action step if any architectural smells are detected. |
 | `exclude-dirs` | `""` | Comma-separated paths to ignore (e.g. `fixtures,e2e,dist`). |
 | `exclude-tests` | `true` | Exclude test suites and vendor folders. |
+| `post-pr-comment` | `true` | Post or update an architectural report comment on Pull Requests. |
+| `post-commit-comment` | `false` | Post an architectural report comment directly onto the Git commit on push events. |
+| `commit-comment-branch-regex` | `^(main\|master)$` | Regex pattern matching branches eligible for commit comments. |
+| `github-token` | `${{ github.token }}` | GitHub token with `pull-requests:write` or `contents:write` permissions. |
 | `python-version` | `3.12` | Python version for runtime environment. |
 | `arcade-agent-version`| `""` | PyPI package version (default: installs latest). |
 
